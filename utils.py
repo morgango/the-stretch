@@ -12,7 +12,7 @@ import streamlit as st
 elastic_index_name = config('ELASTIC_INDEX_NAME', default='none')
 elastic_cloud_id = config('ELASTIC_CLOUD_ID', default='none')
 elastic_api_key = config('ELASTIC_API_KEY', default='none')
-elastic_model_name = config('ELASTIC_API_KEY', default='none')
+elastic_model_name = config('ELASTIC_MODEL_NAME', default='none')
 
 @st.cache_resource
 def get_elastic_client(cloud_id, api_key):
@@ -37,7 +37,74 @@ def get_elastic_client(cloud_id, api_key):
 elastic_client = get_elastic_client(cloud_id=elastic_cloud_id, api_key=elastic_api_key)
 
 
+def build_search_metadata(text_values, 
+                            searchterm, 
+                            search_type, 
+                            index_field_name, 
+                            display_field_name, 
+                            hits, 
+                            fields_to_drop):
+    """
+    Build the search metadata.
+
+    Args:
+
+        text_values (list): The text values to display in the search results.
+        searchterm (str): The search term used in the query.
+        search_type (str): The type of search used in the query.
+        index_field_name (str): The name of the field used in the query.
+        display_field_name (str): The name of the field to display in the search results.
+        hits (list): The hits from the Elasticsearch query.
+        fields_to_drop (list): A list of fields to drop from the DataFrame.
+
+    Returns:
+
+        dict: The search metadata.
+
+    """
+
+    # save raw data to the session state so that they can be displayed as the keyboard is being typed
+    search_metadata = {}
+
+    search_metadata['text_values'] = text_values
+    search_metadata['search_term'] = searchterm
+    search_metadata['search_type'] = search_type
+    search_metadata['search_field'] = index_field_name
+    search_metadata['search_display_field'] = display_field_name
+
+    if hits:
+
+        updated_hits = [replace_with_highlight(hit) for hit in hits]
+
+        search_metadata['hits'] = updated_hits
+        search_metadata['df_hits'] = flatten_hits(search_metadata['hits'], fields_to_drop=fields_to_drop)
+        search_metadata['df_hits_html'] = df_to_html(search_metadata['df_hits'])
+
+    return search_metadata
+
+
+
+def replace_with_highlight(hit):
+    """
+
+        Replace the original text with the exerpts of highlighted text from Elasticsearch.
+
+        Args:       
+            hit (dict): The hit from Elasticsearch.
+
+        Returns:
+            dict: The hit with the highlighted text.
+
+    """    
+    if 'highlight' in hit:
+        for key in hit['highlight']:
+            if key in hit['_source']:
+                hit['_source'][key] = ' '.join(hit['highlight'][key])
+    return hit
+
+
 def df_to_html(df, 
+               remove_highlights=True,
                remove_fields=[]) -> str:
     """
     Convert a pandas DataFrame to an HTML table.
@@ -51,7 +118,10 @@ def df_to_html(df,
         str: The HTML representation of the DataFrame as a table.
     """
 
-        # Remove selected fields
+    if remove_highlights:
+        if 'highlight' in df.columns:
+            df = df.drop('highlight', axis=1)
+
     df = df.drop(remove_fields, axis=1)
 
     html = df.to_html(index=False, escape=False)
@@ -66,6 +136,11 @@ def df_to_html(df,
                 td, th {{
                     padding: 10px;
                     border-bottom: 1px solid #ddd;
+                }}
+                em {{
+                    background-color: #ff0; /* bright yellow background */
+                    color: #000; /* black text */
+                    font-weight: bold; /* bold text */
                 }}
             </style>
             {html}
@@ -146,6 +221,7 @@ def query_elastic_by_single_field(searchterm: str,
         }
 
     elif search_type == "semantic":
+
         query_body["query"]["text_expansion"] = {
             field_name : {
                 "model_id": model,
@@ -153,15 +229,16 @@ def query_elastic_by_single_field(searchterm: str,
             }
         }
 
+    if 'highlight' not in query_body:
+        query_body['highlight'] = {}
+
+    if 'fields' not in query_body['highlight']:
+        query_body['highlight']['fields'] = {}
+
     if highlight:
         query_body["highlight"]["fields"][field_name] = {}
 
     response = client.search(index=index_name, body=query_body)
     hits = response['hits']['hits']
-
-    # save raw data to the session state so that they can be displayed as the keyboard is being typed
-    if hits:
-        st.session_state.df_hits = flatten_hits(hits, fields_to_drop=fields_to_drop)
-        st.session_state.hits = df_to_html(st.session_state.df_hits)
 
     return hits

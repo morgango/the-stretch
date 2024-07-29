@@ -53,8 +53,10 @@ def create_pipeline(client=elastic_client,
         client.ingest.delete_pipeline(id=pipeline_name)
         ic("Deleted pipeline {}".format(pipeline_name))
     except NotFoundError:
-        client.ingest.put_pipeline(id=pipeline_name, body=pipeline)
-        ic("Created pipeline {}".format(pipeline_name))
+        pass
+
+    client.ingest.put_pipeline(id=pipeline_name, body=pipeline)
+    ic("Created pipeline {}".format(pipeline_name))
 
 def read_synonyms_from_csv(synonyms_fn=elastic_synonym_fn):
     """
@@ -152,7 +154,6 @@ def create_index_with_fields(client=elastic_client,
             "line_number": {"type": "integer"},
             "heading": {
                 "type": "text",
-                "copy_to": ["heading_completion"]
             },
             "heading_completion": {
                 "type": "text",
@@ -161,7 +162,6 @@ def create_index_with_fields(client=elastic_client,
             },
             "text": {
                 "type": "text",
-                "copy_to": ["text_completion"],
             },
             output_field_name: {
                 "type": "sparse_vector",
@@ -223,8 +223,10 @@ def index_file_to_elasticsearch(file_path: str,
                 "file_name": os.path.basename(file_path),
                 "line_number": line_number,
                 "heading": last_heading.strip(),
+                "heading_completion": last_heading.strip(),
                 "text": line.strip(),
                 "text_synonym": line.strip(),
+                "text_completion": line.strip(),
             }
 
             if line not in ['', '\n']:

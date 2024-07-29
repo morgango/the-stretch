@@ -1,6 +1,6 @@
 usa,united states,america
 uk,united kingdom,britain
-hr,human resources
+hr,human resources, human, hc, human capital
 ceo,chief executive officer
 cfo,chief financial officer
 it,information technology
@@ -9,6 +9,35 @@ freddy, fredward
 freddie, fredward
 sneakers, shoes, shoe, nike, nikes, addidas, pumas, kicks
 client, customer, patron
-yorba linda, yl, aneheim, aneheim hills, orange county, la
+yorba linda, yl, aneheim, aneheim hills, orange county, la, lax
 purple shield, hmo, ppo, health insurance, provider
 seattle, emerald city, jet city, rain city, coffee city
+# additional
+qa,quality assurance,quality control
+r&d,research and development
+pr,public relations
+marketing,branding,promotion, web marketing, online marketing, digital marketing, social media marketing, marketing department
+sales,business development
+legal,law,legal department, lawyer, paralegal
+finance,financial department
+accounting,accounts,bookkeeping
+ops,operations
+admin,administration,administrative department
+procurement,purchasing,buying
+logistics,supply chain
+pm,project management, project manager, project, projects
+dev,development,software development
+ui,user interface
+ux,user experience
+hrd,human resource development
+hcm,human capital management
+la,los angeles
+nyc,new york city,new york
+sf,san francisco
+sd,san diego
+chicago,windy city
+atlanta,atl,hotlanta
+boston,beantown
+dc,washington dc,washington
+miami,magic city
+dallas,dfw,dallas-fort worth
