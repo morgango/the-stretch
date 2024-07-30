@@ -36,6 +36,25 @@ def get_elastic_client(cloud_id, api_key):
 
 elastic_client = get_elastic_client(cloud_id=elastic_cloud_id, api_key=elastic_api_key)
 
+def add_to_search_history(search_metadata, max_history_size=100):
+    """
+    Add the search metadata to the search history.
+
+    Args:
+        search_metadata (dict): The search metadata to add to the search history.
+        max_history_size (int): The maximum size of the search history. Default is 100.
+    """
+
+    st.session_state.search_last = search_metadata
+
+    if 'search_history' not in st.session_state:
+        st.session_state.search_history = []
+    
+    if len(st.session_state.search_history) > max_history_size:
+        st.session_state.search_history = st.session_state.search_history[1:]
+    
+    st.session_state.search_history.append(search_metadata)
+
 
 def build_search_metadata(text_values, 
                             searchterm, 
@@ -43,7 +62,9 @@ def build_search_metadata(text_values,
                             index_field_name, 
                             display_field_name, 
                             hits, 
-                            fields_to_drop):
+                            fields_to_drop,
+                            add_to_history=False,
+                            max_history_size=100) -> Dict:
     """
     Build the search metadata.
 
@@ -56,16 +77,21 @@ def build_search_metadata(text_values,
         display_field_name (str): The name of the field to display in the search results.
         hits (list): The hits from the Elasticsearch query.
         fields_to_drop (list): A list of fields to drop from the DataFrame.
+        add_to_history (bool): Whether to add the search metadata to the search history. Default is False.
+        max_history_size (int): The maximum size of the search history. Default is 100.
 
     Returns:
 
         dict: The search metadata.
+        st.session_state.search_last: The search metadata.
+        st.session_state.search_history: This value is also added to the search history
 
     """
 
     # save raw data to the session state so that they can be displayed as the keyboard is being typed
     search_metadata = {}
 
+    search_metadata['search_time'] = pd.Timestamp.now()
     search_metadata['text_values'] = text_values
     search_metadata['search_term'] = searchterm
     search_metadata['search_type'] = search_type
@@ -73,13 +99,19 @@ def build_search_metadata(text_values,
     search_metadata['search_display_field'] = display_field_name
 
     if hits:
-
         updated_hits = [replace_with_highlight(hit) for hit in hits]
 
         search_metadata['hits'] = updated_hits
         search_metadata['df_hits'] = flatten_hits(search_metadata['hits'], fields_to_drop=fields_to_drop)
         search_metadata['df_hits_html'] = df_to_html(search_metadata['df_hits'])
-
+    else:
+        search_metadata['hits'] = []
+        search_metadata['df_hits'] = pd.DataFrame()
+        search_metadata['df_hits_html'] = ""
+    
+    if add_to_history:
+        add_to_search_history(search_metadata, max_history_size=max_history_size)
+    
     return search_metadata
 
 

@@ -41,8 +41,8 @@ def synonym_elastic(searchterm: str,
                               index_field_name,
                               display_field_name,
                               hits,
-                              fields_to_drop)
-    st.session_state.search_metadatda = m
+                              fields_to_drop,
+                              add_to_history=True)
 
     return text_values
 
@@ -59,9 +59,9 @@ results = st_searchbox(
 if results:
 
     # write the header
-    if 'text_values' in st.session_state.search_metadatda.keys():
-        header = st.html(f"<h2>{st.session_state.search_metadatda['search_term']}</h2>")
+    if 'text_values' in st.session_state.search_last.keys():
+        header = st.html(f"<h2>{st.session_state.search_last['search_term']}</h2>")
 
     # write the actual values, with some formatting
-    if 'df_hits_html' in st.session_state.search_metadatda.keys():
-        table = st.html(st.session_state.search_metadatda['df_hits_html'])
+    if 'df_hits_html' in st.session_state.search_last.keys():
+        table = st.html(st.session_state.search_last['df_hits_html'])
