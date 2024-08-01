@@ -6,6 +6,13 @@ from decouple import config
 import glob
 from icecream import ic
 
+page_title = "File Browser"
+st.title(page_title)
+st.session_state.current_page = page_title
+
+if 'previous_page' not in st.session_state:
+    st.session_state.previous_page = None
+
 glob_pattern = config('RAW_DATA', default='none')
 
 # Function to load and convert markdown to html

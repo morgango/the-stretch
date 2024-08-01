@@ -194,7 +194,6 @@ def create_index_with_fields(client=elastic_client,
     client.indices.create(index=index_name, mappings=mappings, settings=settings)
     ic("Created index {}".format(index_name))
 
-
 def index_file_to_elasticsearch(file_path: str, 
                                 client=elastic_client, 
                                 index_name=elastic_index_name):
@@ -230,7 +229,10 @@ def index_file_to_elasticsearch(file_path: str,
             }
 
             if line not in ['', '\n']:
-                client.index(index=index_name, body=doc, id=unique_id, pipeline=elastic_pipeline_name)
+                client.index(index=index_name, 
+                             body=doc, 
+                             id=unique_id, 
+                             pipeline=elastic_pipeline_name)
         
 def index_directory_to_elasticsearch(client=elastic_client, 
                                      index_name=elastic_index_name,
@@ -251,7 +253,6 @@ def index_directory_to_elasticsearch(client=elastic_client,
         index_file_to_elasticsearch(client=client, 
                                     file_path=file_path, 
                                     index_name=index_name)
-
 
 def all(client=elastic_client, 
         index_name=elastic_index_name,

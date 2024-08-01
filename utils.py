@@ -36,6 +36,7 @@ def get_elastic_client(cloud_id, api_key):
 
 elastic_client = get_elastic_client(cloud_id=elastic_cloud_id, api_key=elastic_api_key)
 
+
 def add_to_search_history(search_metadata, max_history_size=100):
     """
     Add the search metadata to the search history.
@@ -63,6 +64,7 @@ def build_search_metadata(text_values,
                             display_field_name, 
                             hits, 
                             fields_to_drop,
+                            min_stearchterm_length=1,
                             add_to_history=False,
                             max_history_size=100) -> Dict:
     """
@@ -77,6 +79,7 @@ def build_search_metadata(text_values,
         display_field_name (str): The name of the field to display in the search results.
         hits (list): The hits from the Elasticsearch query.
         fields_to_drop (list): A list of fields to drop from the DataFrame.
+        min_stearchterm_length (int): The minimum length of the search term. Default is 4.
         add_to_history (bool): Whether to add the search metadata to the search history. Default is False.
         max_history_size (int): The maximum size of the search history. Default is 100.
 
@@ -88,34 +91,37 @@ def build_search_metadata(text_values,
 
     """
 
-    # save raw data to the session state so that they can be displayed as the keyboard is being typed
+    if 'search_last' not in st.session_state:
+        st.session_state.search_last = {}
+
     search_metadata = {}
 
-    search_metadata['search_time'] = pd.Timestamp.now()
-    search_metadata['text_values'] = text_values
-    search_metadata['search_term'] = searchterm
-    search_metadata['search_type'] = search_type
-    search_metadata['search_field'] = index_field_name
-    search_metadata['search_display_field'] = display_field_name
+    if len(searchterm) > min_stearchterm_length:
 
-    if hits:
-        updated_hits = [replace_with_highlight(hit) for hit in hits]
+        # save raw data to the session state so that they can be displayed as the keyboard is being typed
+        search_metadata['search_time'] = pd.Timestamp.now()
+        search_metadata['text_values'] = text_values
+        search_metadata['search_term'] = searchterm
+        search_metadata['search_type'] = search_type
+        search_metadata['search_field'] = index_field_name
+        search_metadata['search_display_field'] = display_field_name
 
-        search_metadata['hits'] = updated_hits
-        search_metadata['df_hits'] = flatten_hits(search_metadata['hits'], fields_to_drop=fields_to_drop)
-        search_metadata['df_hits_html'] = df_to_html(search_metadata['df_hits'])
-    else:
-        search_metadata['hits'] = []
-        search_metadata['df_hits'] = pd.DataFrame()
-        search_metadata['df_hits_html'] = ""
-    
-    if add_to_history:
-        add_to_search_history(search_metadata, max_history_size=max_history_size)
+        if hits:
+            updated_hits = [replace_with_highlight(hit) for hit in hits]
+
+            search_metadata['hits'] = updated_hits
+            search_metadata['df_hits'] = flatten_hits(search_metadata['hits'], fields_to_drop=fields_to_drop)
+            search_metadata['df_hits_html'] = df_to_html(search_metadata['df_hits'], remove_highlights=True)
+        else:
+            search_metadata['hits'] = []
+            search_metadata['df_hits'] = pd.DataFrame()
+            search_metadata['df_hits_html'] = ""
+        
+        if add_to_history:
+            add_to_search_history(search_metadata, max_history_size=max_history_size)
     
     return search_metadata
-
-
-
+    
 def replace_with_highlight(hit):
     """
 
@@ -203,6 +209,7 @@ def flatten_hits(hits: List[dict], fields_to_drop=['_id', '_index', 'text_synony
 
 
 def query_elastic_by_single_field(searchterm: str, 
+                                  
                   index_name=elastic_index_name, 
                   field_name="",
                   search_type="match",
@@ -269,6 +276,53 @@ def query_elastic_by_single_field(searchterm: str,
 
     if highlight:
         query_body["highlight"]["fields"][field_name] = {}
+
+    response = client.search(index=index_name, body=query_body)
+    hits = response['hits']['hits']
+
+    return hits
+
+def query_elastic_by_multiple_fields(searchterm: str, 
+                  index_name=elastic_index_name, 
+                  field_names=None, 
+                  search_type="match",
+                  fuzziness: str = None,
+                  client=elastic_client) -> List[Any]:
+
+    if search_type in ["semantic", "text_expansion", "vector"]:
+        search_type = "semantic"
+        highlight = False
+
+    query_body = {"query": {}}
+
+    if search_type == "match":
+        # Use multi_match query to search in multiple fields
+        query_body["query"]["multi_match"] = {
+            "query": searchterm,
+            "fields": field_names
+        }
+    elif search_type == "fuzzy":
+        # You need to write a loop for fuzzy search in multiple fields
+        query_body["query"]["bool"] = {
+            "should": [
+                {
+                    "fuzzy": {
+                        field_name: {
+                            "value": searchterm,
+                            "fuzziness": fuzziness if fuzziness else "AUTO"
+                        }
+                    }
+                }
+                for field_name in field_names
+            ]
+        }
+
+    if 'highlight' not in query_body:
+        query_body['highlight'] = {}
+
+    if 'fields' not in query_body['highlight']:
+        query_body['highlight']['fields'] = {}
+
 
     response = client.search(index=index_name, body=query_body)
     hits = response['hits']['hits']
