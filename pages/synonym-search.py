@@ -5,7 +5,7 @@ from typing import Any, List
 from decouple import config
 from icecream import ic
 
-from utils import query_elastic_by_single_field, get_elastic_client, flatten_hits, df_to_html, replace_with_highlight, build_search_metadata,add_to_search_history
+from utils import query_elastic_by_single_field, get_elastic_client, build_search_metadata, add_to_search_history, display_results
 
 # get the environment variables
 elastic_index_name = config('ELASTIC_INDEX_NAME', default='none')
@@ -29,16 +29,15 @@ def synonym_elastic(searchterm: str,
                      display_field_name="text") -> List[Any]:
 
     index_field_name = field_name
-    fields_to_drop = ['_index', '_id', 'text', 'heading_completion', 'text_completion', 'text_sparse_embedding','model_id']
+    excluded_fields = ['_index', '_id', 'text', 'heading_completion', 'text_completion', 'text_sparse_embedding','model_id']
     search_type = "match"
 
-    hits = query_elastic_by_single_field(searchterm, 
+    hits, query = query_elastic_by_single_field(searchterm, 
                                   index_name=elastic_index_name, 
                                   field_name=index_field_name,
                                   search_type=search_type,
                                   client=elastic_client,
-                                  highlight=True,
-                                  fields_to_drop=fields_to_drop)
+                                  highlight=True)
 
     text_values = [hit['_source'][index_field_name] for hit in hits if '_source' in hit and index_field_name in hit['_source']]
 
@@ -48,7 +47,8 @@ def synonym_elastic(searchterm: str,
                               index_field_name,
                               display_field_name,
                               hits,
-                              fields_to_drop)
+                              excluded_fields,
+                              query=query)
     
     add_to_search_history(m)
 
@@ -64,19 +64,7 @@ results = st_searchbox(
     rerun_on_update=True,
 )
 
-# We don't want to generate HTML if we are on the page for the first time.
-if st.session_state.previous_page == page_title and \
-    st.session_state.current_page == page_title and \
-        results:
-
-    ic(st.session_state.previous_page, results)
-    # write the header
-    if 'text_values' in st.session_state.search_last.keys():
-        header = st.html(f"<h2>{st.session_state.search_last['search_term']}</h2>")
-
-    # write the actual values, with some formatting
-    if 'df_hits_html' in st.session_state.search_last.keys():
-        table = st.html(st.session_state.search_last['df_hits_html'])
+display_results(page_title, results=results)
 
 # ensures that we have been on this page before
 st.session_state.previous_page = page_title

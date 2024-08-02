@@ -4,6 +4,8 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
+
+
         {
             "name": "Python:Streamlit",
             "type": "debugpy",
@@ -11,10 +13,19 @@
             "program": ".venv/bin/streamlit",
             "args": [
                 "run",
-                "${file}",
+                "main.py",
                 "--server.port",
                 "2000",
             ]
+        },
+        {
+            "name": "Indexing",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/indexing.py",
+            "args": ["all"],
+            "console": "integratedTerminal"
         }
+
     ]
 }

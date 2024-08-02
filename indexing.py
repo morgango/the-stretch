@@ -1,7 +1,8 @@
-from elasticsearch import Elasticsearch, NotFoundError
+from elasticsearch import Elasticsearch, NotFoundError, exceptions
 from icecream import ic
 import glob
 import os
+import time
 import hashlib
 import re
 import fire
@@ -14,49 +15,95 @@ elastic_index_name = config('ELASTIC_INDEX_NAME', default='none')
 raw_data = config('RAW_DATA', default='none')
 elastic_synonym_fn = config('ELASTIC_SYNONYM_FILE', default='none')
 elastic_synonym_id = config('ELASTIC_SYNONYM_ID', default='none')
-elastic_pipeline_name = config('ELASTIC_PIPELINE_NAME', default='none')
-elastic_model_name = config('ELASTIC_MODEL_NAME', default='none')
-elastic_input_field_name = config('ELASTIC_INPUT_FIELD_NAME', default='none')
-elastic_output_field_name = config('ELASTIC_OUTPUT_FIELD_NAME', default='none')
+elastic_sparse_field_name = config('ELASTIC_SPARSE_FIELD_NAME', default='none')
+elastic_sparse_model_name = config('ELASTIC_SPARSE_MODEL_NAME', default='none')
+elastic_dense_field_name = config('ELASTIC_DENSE_FIELD_NAME', default='none')
+elastic_dense_field_model_name = config('ELASTIC_DENSE_FIELD_MODEL_NAME', default='none')
+elastic_dense_field_dims = config('ELASTIC_DENSE_FIELD_DIMS', default=0, cast=int)
+elastic_sparse_inference_endpoint_name = config('ELASTIC_SPARSE_INFERENCE_ENDPOINT_NAME', default='none')
 
 elastic_client = Elasticsearch(
     cloud_id=elastic_cloud_id,
     api_key=elastic_api_key,
 )
 
-ic(elastic_cloud_id, elastic_api_key, elastic_index_name, raw_data, elastic_synonym_fn, elastic_synonym_id)
 
-def create_pipeline(client=elastic_client,
-                    output_field_name = elastic_output_field_name, 
-                    input_field_name = elastic_input_field_name, 
-                    model_name = elastic_model_name, 
-                    pipeline_name=elastic_pipeline_name):
+def create_inference_endpoint(inference_endpoint_name=elastic_sparse_inference_endpoint_name, 
+                              client=elastic_client):
+    """
+    Create an inference endpoint in Elasticsearch.
+
+    This code is lifted almost directly from Elasticsearch Labs: 
+        https://github.com/elastic/elasticsearch-labs/blob/main/notebooks/search/09-semantic-text.ipynb
+
+    Args:
+        inference_endpoint_name (str): The name of the inference endpoint to create.
+        client (Elasticsearch): The Elasticsearch client.
     
-    pipeline = {
-        "description": "Inference pipeline for ELSER embeddings",
-        "processors": [
-            {
-                "inference": {
-                    "model_id": model_name,
-                    "input_output": [
-                        {
-                            "input_field": input_field_name,
-                            "output_field": output_field_name,
-                        }
-                    ]
-                }
-            }
-        ],
-    }
+    Raises:
+        exceptions.BadRequestError: If the inference endpoint already exists.
 
-    try: 
-        client.ingest.delete_pipeline(id=pipeline_name)
-        ic("Deleted pipeline {}".format(pipeline_name))
-    except NotFoundError:
+    Returns:
+        dict: The information about the created inference endpoint.
+
+    """
+    
+    ic("Creating inference endpoints", inference_endpoint_name, client)
+
+    try:
+        client.inference.delete_model(inference_id=inference_endpoint_name)
+        ic("Deleted inference endpoint {}".format(inference_endpoint_name))
+    except exceptions.NotFoundError:
+        # Inference endpoint does not exist
         pass
 
-    client.ingest.put_pipeline(id=pipeline_name, body=pipeline)
-    ic("Created pipeline {}".format(pipeline_name))
+    try:
+        client.options(
+            request_timeout=60, max_retries=3, retry_on_timeout=True
+        ).inference.put_model(
+            task_type="sparse_embedding",
+            inference_id=inference_endpoint_name,
+            body={
+                "service": "elser",
+                "service_settings": {"num_allocations": 1, "num_threads": 1},
+            },
+        )
+        
+        ic("Created inference endpoint {}".format(inference_endpoint_name))
+
+    except exceptions.BadRequestError as e:
+        if e.error == "resource_already_exists_exception":
+            ic("Inference endpoint already exists {}".format(inference_endpoint_name))
+        else:
+            raise e
+        
+    inference_endpoint_info = client.inference.get_model(
+        inference_id=inference_endpoint_name,
+    )
+
+    ic(dict(inference_endpoint_info))
+    
+    model_id = inference_endpoint_info["endpoints"][0]["service_settings"]["model_id"]
+
+    # deploy the ELSER model if it is not already deployed
+    while True:
+        status = client.ml.get_trained_models_stats(
+            model_id=model_id,
+        )
+
+        deployment_stats = status["trained_model_stats"][0].get("deployment_stats")
+        if deployment_stats is None:
+            ic("ELSER Model is currently being deployed.")
+            time.sleep(5)
+            continue
+
+        nodes = deployment_stats.get("nodes")
+        if nodes is not None and len(nodes) > 0:
+            ic("ELSER Model has been successfully deployed.")
+            break
+        else:
+            ic("ELSER Model is currently being deployed.")
+        time.sleep(5)
 
 def read_synonyms_from_csv(synonyms_fn=elastic_synonym_fn):
     """
@@ -95,26 +142,28 @@ def create_synonyms_with_csv(client=elastic_client,
     """
     synonyms_set = read_synonyms_from_csv(synonyms_fn=synonyms_fn)
     client.synonyms.put_synonym(id=synonyms_id, synonyms_set=synonyms_set)
+    ic("Created synonyms with CSV", synonyms_fn, synonyms_id)
 
 def create_index_with_fields(client=elastic_client, 
-                             pipeline_name= elastic_pipeline_name,
+                             inference_endpoint_name = elastic_sparse_inference_endpoint_name,
                              index_name=elastic_index_name,
-                             model_name=elastic_model_name,
-                             input_field_name=elastic_input_field_name,
-                             output_field_name=elastic_output_field_name):
+                             sparse_field_name=elastic_sparse_field_name,
+                             dense_field_name=elastic_dense_field_name,
+                             dense_field_dims=elastic_dense_field_dims):
     """
     Create an Elasticsearch index with custom analysis settings and mappings.
 
     Args:
         client (Elasticsearch): The Elasticsearch client.
-        pipeline_name (str): The name of the pipeline to create.
+        inference_endoint_name (str): The name of the inference endpoint to use.
         index_name (str): The name of the index to create.
+        sparse_field_name (str): The name of the output field.
+        dense_field_name (str): The name of the dense field.
+        dense_field_dims (int): The number of dimensions for the dense field.
+        
     """
 
     settings = {
-        "index": {
-            "default_pipeline": pipeline_name
-        },
         "analysis": {
             "filter": {
                 "autocomplete_filter": {
@@ -161,10 +210,18 @@ def create_index_with_fields(client=elastic_client,
                 "search_analyzer": "standard"
             },
             "text": {
-                "type": "text",
+                "type": "text", 
+                "copy_to": ["text_sparse_embedding"]
             },
-            output_field_name: {
-                "type": "sparse_vector",
+            sparse_field_name: {
+                "type": "semantic_text",
+                "inference_id": inference_endpoint_name
+            },
+            dense_field_name: {
+                "type": "dense_vector",
+                "dims": dense_field_dims,
+                "index": True,
+                "similarity": "cosine",
             },
             "text_completion": {
                 "type": "text",
@@ -175,21 +232,13 @@ def create_index_with_fields(client=elastic_client,
                 "type": "text",
                 "analyzer": "autocomplete",
                 "search_analyzer": "acme_synonym_analyzer"
-            }
+            },
         }
     }
-    ic("Creating embeddings in {}".format(output_field_name))
 
     if client.indices.exists(index=index_name):
         client.indices.delete(index=index_name)
         ic("Deleted index {}".format(index_name))
-
-    create_pipeline(client=client, 
-                output_field_name=output_field_name, 
-                input_field_name=input_field_name, 
-                model_name=model_name, 
-                pipeline_name=pipeline_name)
-
 
     client.indices.create(index=index_name, mappings=mappings, settings=settings)
     ic("Created index {}".format(index_name))
@@ -205,7 +254,11 @@ def index_file_to_elasticsearch(file_path: str,
         client (Elasticsearch): The Elasticsearch client.
         index_name (str): The name of the index to index the file into.
     """
+
+    from elasticsearch import helpers, exceptions
+
     last_heading = None  # This will keep track of the last seen heading
+    actions = []  # This will store all the actions to be performed in bulk
 
     with open(file_path, 'r', encoding='utf-8') as file:
         ic("Opened {}".format(file_path))
@@ -224,15 +277,24 @@ def index_file_to_elasticsearch(file_path: str,
                 "heading": last_heading.strip(),
                 "heading_completion": last_heading.strip(),
                 "text": line.strip(),
-                "text_synonym": line.strip(),
                 "text_completion": line.strip(),
+                "text_synonym": line.strip(),
             }
 
             if line not in ['', '\n']:
-                client.index(index=index_name, 
-                             body=doc, 
-                             id=unique_id, 
-                             pipeline=elastic_pipeline_name)
+                action = {
+                    "_index": index_name,
+                    "_id": unique_id,
+                    "_source": doc
+                }
+                actions.append(action)
+
+    # Perform all actions in bulk
+    if actions:
+        try:
+            helpers.bulk(client, actions)
+        except helpers.BulkIndexError as e:
+            ic(f"Bulk index error: {e.errors}")
         
 def index_directory_to_elasticsearch(client=elastic_client, 
                                      index_name=elastic_index_name,
@@ -256,10 +318,7 @@ def index_directory_to_elasticsearch(client=elastic_client,
 
 def all(client=elastic_client, 
         index_name=elastic_index_name,
-        pipeline_name=elastic_pipeline_name,
-        input_field_name=elastic_input_field_name,
-        output_field_name=elastic_output_field_name,
-        model_name=elastic_model_name,
+        sparse_field_name=elastic_sparse_field_name,
         synonyms_fn=elastic_synonym_fn, 
         synonyms_id=elastic_synonym_id, 
         raw_data=raw_data):
@@ -273,18 +332,14 @@ def all(client=elastic_client,
         synonyms_id (str): The ID to assign to the synonyms set in Elasticsearch.
         raw_data (str): The path pattern to match the files to index.
     """
-    # create_pipeline(client=client, 
-    #                 output_field_name=output_field_name, 
-    #                 input_field_name=input_field_name, 
-    #                 model_name=model_name, 
-    #                 pipeline_name=pipeline_name)
+    create_inference_endpoint(inference_endpoint_name=elastic_sparse_inference_endpoint_name,
+                                client=client)
     create_synonyms_with_csv(client=client, 
                              synonyms_fn=synonyms_fn, 
                              synonyms_id=synonyms_id)
     create_index_with_fields(client=client, 
                              index_name=index_name,
-                             pipeline_name=pipeline_name,
-                             output_field_name=output_field_name)
+                             sparse_field_name=sparse_field_name)
     index_directory_to_elasticsearch(client=client, 
                                      index_name=index_name, 
                                      raw_data=raw_data)
@@ -294,14 +349,14 @@ if __name__ == "__main__":
     # Use Fire to automatically generate a CLI.
     #
     # Invoking this function would look something like:
-    #   python indexing.py pipelines  (grabs defaults from .env)
+    #   python indexing.py inference  (grabs defaults from .env)
     #   python indexing.py synonyms  (grabs defaults from .env)
     #   python indexing.py index  (grabs defaults from .env)
     #   python indexing.py load  (grabs defaults from .env)
     #   python indexing.py all --index-name acme --synonyms_fn synonyms.csv --synonyms_id acme-synonyms --raw_data "site/*.txt" (overrides defaults)
 
     fire.Fire({
-        # "pipelines": create_pipeline,
+        "inference": create_inference_endpoint,
         "synonyms": create_synonyms_with_csv,
         "index": create_index_with_fields,
         "load": index_directory_to_elasticsearch,

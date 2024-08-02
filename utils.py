@@ -12,7 +12,7 @@ import streamlit as st
 elastic_index_name = config('ELASTIC_INDEX_NAME', default='none')
 elastic_cloud_id = config('ELASTIC_CLOUD_ID', default='none')
 elastic_api_key = config('ELASTIC_API_KEY', default='none')
-elastic_model_name = config('ELASTIC_MODEL_NAME', default='none')
+elastic_sparse_model_name = config('ELASTIC_SPARSE_MODEL_NAME', default='none')
 
 @st.cache_resource
 def get_elastic_client(cloud_id, api_key):
@@ -33,9 +33,39 @@ def get_elastic_client(cloud_id, api_key):
 
     return elastic_client
 
-
 elastic_client = get_elastic_client(cloud_id=elastic_cloud_id, api_key=elastic_api_key)
 
+def display_results(page_title:str, results:str):
+    """
+    Display the results of the search, based on the page title and the sesion state
+    
+    Parameters
+
+        results: str - the results of the search
+        page_title: str - the title of the page
+        st.session_state.previous_page: str - the previous page title
+        st.session_state.current_page: str - the current page title
+        st.session_state.search_last: dict - the last search metadata
+    
+    Returns
+
+            None
+
+    """
+
+    # We don't want to generate HTML if we are on the page for the first time.
+    if st.session_state.previous_page == page_title and \
+        st.session_state.current_page == page_title and \
+            results:
+
+        ic(st.session_state.previous_page, results)
+        # write the header
+        if 'text_values' in st.session_state.search_last.keys():
+            header = st.html(f"<h2>{st.session_state.search_last['search_term']}</h2>")
+
+        # write the actual values, with some formatting
+        if 'df_hits_html' in st.session_state.search_last.keys():
+            table = st.html(st.session_state.search_last['df_hits_html'])
 
 def add_to_search_history(search_metadata, max_history_size=100):
     """
@@ -56,14 +86,14 @@ def add_to_search_history(search_metadata, max_history_size=100):
     
     st.session_state.search_history.append(search_metadata)
 
-
 def build_search_metadata(text_values, 
                             searchterm, 
                             search_type, 
                             index_field_name, 
                             display_field_name, 
-                            hits, 
-                            fields_to_drop,
+                            hits,
+                            excluded_fields,
+                            query = [], 
                             min_stearchterm_length=1,
                             add_to_history=False,
                             max_history_size=100) -> Dict:
@@ -78,7 +108,8 @@ def build_search_metadata(text_values,
         index_field_name (str): The name of the field used in the query.
         display_field_name (str): The name of the field to display in the search results.
         hits (list): The hits from the Elasticsearch query.
-        fields_to_drop (list): A list of fields to drop from the DataFrame.
+        query (list): The query used in the Elasticsearch query.
+        excluded_fields (list): A list of fields to drop from the DataFrame.
         min_stearchterm_length (int): The minimum length of the search term. Default is 4.
         add_to_history (bool): Whether to add the search metadata to the search history. Default is False.
         max_history_size (int): The maximum size of the search history. Default is 100.
@@ -105,12 +136,13 @@ def build_search_metadata(text_values,
         search_metadata['search_type'] = search_type
         search_metadata['search_field'] = index_field_name
         search_metadata['search_display_field'] = display_field_name
+        search_metadata['search_query'] = query
 
         if hits:
             updated_hits = [replace_with_highlight(hit) for hit in hits]
 
             search_metadata['hits'] = updated_hits
-            search_metadata['df_hits'] = flatten_hits(search_metadata['hits'], fields_to_drop=fields_to_drop)
+            search_metadata['df_hits'] = flatten_hits(search_metadata['hits'], excluded_fields=excluded_fields)
             search_metadata['df_hits_html'] = df_to_html(search_metadata['df_hits'], remove_highlights=True)
         else:
             search_metadata['hits'] = []
@@ -139,7 +171,6 @@ def replace_with_highlight(hit):
             if key in hit['_source']:
                 hit['_source'][key] = ' '.join(hit['highlight'][key])
     return hit
-
 
 def df_to_html(df, 
                remove_highlights=True,
@@ -185,7 +216,7 @@ def df_to_html(df,
         '''
     return html
 
-def flatten_hits(hits: List[dict], fields_to_drop=['_id', '_index', 'text_synonym']) -> List[dict]:
+def flatten_hits(hits: List[dict], excluded_fields=['_id', '_index', 'text_synonym']) -> List[dict]:
     """
     Flatten the hits from an Elasticsearch query.
 
@@ -203,10 +234,11 @@ def flatten_hits(hits: List[dict], fields_to_drop=['_id', '_index', 'text_synony
 
     # Convert the list of dictionaries into a pandas DataFrame
     tmp = pd.DataFrame(flattened_data)
-    df = tmp.drop(fields_to_drop, axis=1)
+
+    valid_fields = set(excluded_fields).intersection(set(tmp.columns))       
+    df = tmp.drop(valid_fields, axis=1)
 
     return df
-
 
 def query_elastic_by_single_field(searchterm: str, 
                                   
@@ -215,8 +247,7 @@ def query_elastic_by_single_field(searchterm: str,
                   search_type="match",
                   fuzziness: str = None,
                   highlight: bool = False,
-                  model: str = elastic_model_name,
-                  fields_to_drop=['_id', '_index', 'text_synonym'],
+                  model: str = elastic_sparse_model_name,
                   client=elastic_client) -> List[Any]:
     """
     Query Elasticsearch by field.
@@ -229,11 +260,12 @@ def query_elastic_by_single_field(searchterm: str,
         fuzziness (str): The fuzziness parameter for fuzzy search. Default is None.
         highlight (bool): Whether to highlight the search term in the results. Default is False.
         model (str): The name of the model to use for semantic search. Default is "none".
-        fields_to_drop (list): A list of fields to drop from the DataFrame. Default is ['_id', '_index', 'text_synonym'].
+        excluded_fields (list): A list of fields to drop from the DataFrame. Default is ['_id', '_index', 'text_synonym'].
         client (Elasticsearch): The Elasticsearch client to use for the query.
 
     Returns:
         list: A list of Elasticsearch hits.
+        query_body (dict): The query body used in the Elasticsearch query.
         st.session_state.df_hits: A dataframe with all the hits 
         st.session_state.hits: An HTML representation of the dataframe
 
@@ -261,11 +293,9 @@ def query_elastic_by_single_field(searchterm: str,
 
     elif search_type == "semantic":
 
-        query_body["query"]["text_expansion"] = {
-            field_name : {
-                "model_id": model,
-                "model_text": searchterm
-            }
+        query_body["query"]["semantic"] = {
+            "field": field_name,
+            "query": searchterm
         }
 
     if 'highlight' not in query_body:
@@ -280,7 +310,7 @@ def query_elastic_by_single_field(searchterm: str,
     response = client.search(index=index_name, body=query_body)
     hits = response['hits']['hits']
 
-    return hits
+    return hits, query_body
 
 def query_elastic_by_multiple_fields(searchterm: str, 
                   index_name=elastic_index_name, 
@@ -288,6 +318,22 @@ def query_elastic_by_multiple_fields(searchterm: str,
                   search_type="match",
                   fuzziness: str = None,
                   client=elastic_client) -> List[Any]:
+    """
+    Query Elasticsearch by multiple fields.
+
+    Args:
+        searchterm (str): The search term to query.
+        index_name (str): The name of the Elasticsearch index to search in.
+        field_names (list): A list of field names to search in.
+        search_type (str): The type of search to perform. Options: "match" (default), "fuzzy".
+        fuzziness (str): The fuzziness parameter for fuzzy search. Default is None.
+        client (Elasticsearch): The Elasticsearch client to use for the query.
+
+    Returns:
+        hits: A list of Elasticsearch hits.
+        query_body (dict): The query body used in the Elasticsearch query.
+
+    """
 
     if search_type in ["semantic", "text_expansion", "vector"]:
         search_type = "semantic"
@@ -327,4 +373,4 @@ def query_elastic_by_multiple_fields(searchterm: str,
     response = client.search(index=index_name, body=query_body)
     hits = response['hits']['hits']
 
-    return hits
+    return hits, query_body

@@ -23,7 +23,7 @@ from icecream import ic
 import re
 
 
-from utils import query_elastic_by_multiple_fields, get_elastic_client, flatten_hits, df_to_html, replace_with_highlight, build_search_metadata,add_to_search_history
+from utils import query_elastic_by_multiple_fields, get_elastic_client, build_search_metadata,add_to_search_history
 
 # get the environment variables
 elastic_index_name = config('ELASTIC_INDEX_NAME', default='none')
@@ -67,10 +67,10 @@ def suggest_elastic(searchterm: str,
                      display_field_name="text") -> List[Any]:
 
     index_field_names = field_names
-    fields_to_drop = ['_index', '_id', 'text', 'heading', 'text_synonym', 'text_sparse_embedding','model_id']
+    excluded_fields = ['_index', '_id', 'text', 'heading', 'text_synonym', 'text_sparse_embedding','model_id']
     search_type = "match"
 
-    hits = query_elastic_by_multiple_fields(searchterm, 
+    hits, query = query_elastic_by_multiple_fields(searchterm, 
                                   index_name=elastic_index_name, 
                                   field_names=index_field_names,
                                   search_type=search_type,
@@ -84,7 +84,8 @@ def suggest_elastic(searchterm: str,
                               index_field_names,
                               display_field_name,
                               hits,
-                              fields_to_drop)
+                              excluded_fields,
+                              query=query)
     
     add_to_search_history(m)
 
