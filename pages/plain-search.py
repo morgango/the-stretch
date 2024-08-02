@@ -52,6 +52,7 @@ def search_elastic(searchterm: str,
 
     return text_values
 
+search_type = st.selectbox('Select a search type', ['Plain', 'Fuzzy', 'Synonym', 'Semantic', 'Suggest'])
 # pass search function to searchbox
 results = st_searchbox(
     search_elastic,
@@ -61,6 +62,7 @@ results = st_searchbox(
     default_use_searchterm=True,
     rerun_on_update=True,
 )
+
 display_results(page_title, results=results)
 
 st.session_state.previous_page = page_title
